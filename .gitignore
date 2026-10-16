@@ -1,0 +1,4 @@
+.env
+league_of_legends/
+data/
+__pycache__/
