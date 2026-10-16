@@ -18,6 +18,14 @@ CREATE TABLE IF NOT EXISTS players (
     seeded_at REAL,
     ids_fetched_at REAL
 );
+CREATE TABLE IF NOT EXISTS seed_pages (
+    tier TEXT,
+    division TEXT,
+    page INTEGER,
+    players INTEGER,                         -- 0 = past the last page
+    fetched_at REAL,
+    PRIMARY KEY (tier, division, page)
+);
 CREATE TABLE IF NOT EXISTS matches (
     match_id TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'pending',  -- pending | done | missing
@@ -50,17 +58,31 @@ class Storage:
         )
         self.conn.commit()
 
-    def has_players(self, tier, division):
-        row = self.conn.execute(
-            "SELECT 1 FROM players WHERE tier = ? AND division = ? LIMIT 1", (tier, division)
+    def next_seed_page(self, tier, division):
+        """The next league page to fetch for this tier/division, or None if all are done."""
+        last_page, exhausted = self.conn.execute(
+            "SELECT MAX(page), MAX(players = 0) FROM seed_pages WHERE tier = ? AND division = ?",
+            (tier, division),
         ).fetchone()
-        return row is not None
+        if exhausted:
+            return None
+        return (last_page or 0) + 1
 
-    def next_player(self):
-        """A random player whose match IDs haven't been fetched yet."""
-        row = self.conn.execute(
-            "SELECT puuid FROM players WHERE ids_fetched_at IS NULL ORDER BY RANDOM() LIMIT 1"
-        ).fetchone()
+    def mark_seed_page(self, tier, division, page, players):
+        self.conn.execute(
+            "INSERT OR REPLACE INTO seed_pages (tier, division, page, players, fetched_at) VALUES (?, ?, ?, ?, ?)",
+            (tier, division, page, players, time.time()),
+        )
+        self.conn.commit()
+
+    def next_player(self, tiers=None):
+        """A random player (optionally from the given tiers) whose match IDs haven't been fetched yet."""
+        sql = "SELECT puuid FROM players WHERE ids_fetched_at IS NULL"
+        params = []
+        if tiers:
+            sql += f" AND tier IN ({', '.join('?' * len(tiers))})"
+            params = list(tiers)
+        row = self.conn.execute(sql + " ORDER BY RANDOM() LIMIT 1", params).fetchone()
         return row[0] if row else None
 
     def mark_player_done(self, puuid):

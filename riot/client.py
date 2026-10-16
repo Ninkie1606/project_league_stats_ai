@@ -25,6 +25,7 @@ class RiotClient:
         self.session = session or requests.Session()
         self.session.headers["X-Riot-Token"] = self.api_key
         self.request_count = 0
+        self._counts_synced = set()
 
     def get(self, routing, path, params=None, method=None):
         """GET https://{routing}.api.riotgames.com{path}.
@@ -88,8 +89,12 @@ class RiotClient:
         ):
             if limit_header in headers:
                 self.limiter.set_limits(key, parse_limit_header(headers[limit_header]))
-            if count_header in headers:
+            # Riot's counts only tell us what an earlier run already used, so apply
+            # them once. Riot uses fixed windows; re-applying them on every
+            # response would keep pushing our sliding windows forward.
+            if count_header in headers and key not in self._counts_synced:
                 self.limiter.sync_counts(key, parse_limit_header(headers[count_header]))
+                self._counts_synced.add(key)
 
     # --- league-v4 (platform routing) ---
 
