@@ -55,7 +55,47 @@ Met `--forever` draait het tot de key verloopt (max. 24 uur). Dan stopt het met 
 
 Bij netwerkproblemen wacht het script 60 seconden en probeert het opnieuw, dus een korte internetstoring stopt de run niet.
 
-Om de terminal te kunnen sluiten terwijl het doorloopt:
+Om de terminal te kunnen sluiten terwijl het doorloopt, gebruik je **tmux** (aanrader) of `nohup`.
+
+### Met tmux
+
+tmux houdt een terminalsessie open op de achtergrond. Je kunt het venster sluiten en later terugkomen; het script draait gewoon door.
+
+**Installeren** (eenmalig):
+
+```bash
+sudo apt install tmux        # Ubuntu / Debian / WSL
+brew install tmux            # macOS
+```
+
+**Sessie starten en het script draaien:**
+
+```bash
+tmux new -s league                              # nieuwe sessie met de naam "league"
+cd ~/workspace/project_league_stats_ai
+source league_of_legends/bin/activate
+python collect.py run --tiers GOLD PLATINUM --forever
+```
+
+**Loskoppelen** (het script blijft draaien): druk `Ctrl+B`, laat los, en druk dan `D`. Nu kun je de terminal sluiten.
+
+**Later terugkomen:**
+
+```bash
+tmux ls                      # welke sessies zijn er?
+tmux attach -t league        # terug naar de sessie "league"
+```
+
+**Stoppen:**
+
+```bash
+# in de sessie: Ctrl+C stopt het script netjes, daarna `exit` sluit de sessie
+tmux kill-session -t league  # of van buitenaf: sessie (en script) meteen afsluiten
+```
+
+Gebruik bij voorkeur `Ctrl+C`; dan meldt het script nog wat er in de database staat. Er gaat met `kill-session` geen data verloren, want elke match wordt meteen opgeslagen.
+
+### Met nohup
 
 ```bash
 nohup python collect.py run --tiers GOLD PLATINUM --forever > data/collect.log 2>&1 &
