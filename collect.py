@@ -2,11 +2,13 @@
 
 Examples:
     python collect.py run --tiers GOLD PLATINUM --max-matches 500
+    python collect.py run --tiers GOLD PLATINUM EMERALD --forever
     python collect.py run --tiers CHALLENGER --since 2026-01-08
     python collect.py timelines --max 200
     python collect.py stats
 
 Stop at any time with Ctrl+C; the next run continues where it left off.
+With --forever the crawl keeps going until the API key expires.
 """
 import argparse
 import logging
@@ -14,17 +16,20 @@ import sys
 import time
 from datetime import datetime, timezone
 
+import requests
+
 from riot.client import ApiKeyError, RiotClient
 from riot.storage import Storage
 
 APEX_TIERS = ("CHALLENGER", "GRANDMASTER", "MASTER")
 DIVISIONS = ("I", "II", "III", "IV")
+NETWORK_PAUSE = 60  # seconds to wait after a network outage in --forever mode
 
 log = logging.getLogger("collect")
 
 
 class Progress:
-    def __init__(self, client, every=25):
+    def __init__(self, client, every=100):
         self.client = client
         self.every = every
         self.started = time.monotonic()
@@ -33,62 +38,88 @@ class Progress:
     def tick(self, label):
         self.done += 1
         if self.done % self.every == 0:
-            minutes = (time.monotonic() - self.started) / 60
+            hours = (time.monotonic() - self.started) / 3600
             log.info(
-                "%d %s opgehaald, %d requests (%.0f req/min)",
-                self.done, label, self.client.request_count, self.client.request_count / max(minutes, 1e-9),
+                "%d %s opgehaald, %d requests, %.0f %s/uur",
+                self.done, label, self.client.request_count, self.done / max(hours, 1e-9), label,
             )
 
 
-def seed(client, storage, tiers, divisions, pages):
+def seed(client, storage, tiers, divisions):
+    """Fetch one more league page for every tier/division. Returns the number of players added."""
+    added = 0
     for tier in tiers:
-        if tier in APEX_TIERS:
-            if storage.has_players(tier, "I"):
+        tier_divisions = ["I"] if tier in APEX_TIERS else divisions
+        for division in tier_divisions:
+            page = storage.next_seed_page(tier, division)
+            if page is None:
                 continue
-            entries = client.apex_league(tier)
-            storage.add_players(entries, tier, "I")
-            log.info("%s: %d spelers toegevoegd", tier, len(entries))
-            continue
-        for division in divisions:
-            if storage.has_players(tier, division):
-                continue
-            total = 0
-            for page in range(1, pages + 1):
+            if tier in APEX_TIERS:
+                # Apex tiers are a single list; mark page 2 as empty so it isn't fetched again.
+                entries = client.apex_league(tier)
+                storage.mark_seed_page(tier, division, 2, 0)
+            else:
                 entries = client.league_entries(tier, division, page)
-                if not entries:
+            storage.add_players(entries, tier, division)
+            storage.mark_seed_page(tier, division, page, len(entries))
+            added += len(entries)
+            log.info("%s %s pagina %d: %d spelers", tier, division, page, len(entries))
+    return added
+
+
+def fetch_one_match(client, storage, match_id):
+    try:
+        data = client.match(match_id)
+    except requests.HTTPError as exc:
+        if exc.response is not None and 400 <= exc.response.status_code < 500:
+            log.warning("Match %s overgeslagen (HTTP %s)", match_id, exc.response.status_code)
+            data = None
+        else:
+            raise
+    storage.save_match(match_id, data)
+
+
+def crawl_matches(client, storage, tiers, divisions, max_matches, ids_per_player, start_time, forever):
+    progress = Progress(client)
+    while forever or progress.done < max_matches:
+        try:
+            match_id = storage.next_pending_match()
+            if match_id:
+                fetch_one_match(client, storage, match_id)
+                progress.tick("matches")
+                continue
+            puuid = storage.next_player(tiers)
+            if puuid is None:
+                if seed(client, storage, tiers, divisions) == 0:
+                    log.info("Alle league-pagina's van deze tiers zijn op; kies meer tiers.")
                     break
-                storage.add_players(entries, tier, division)
-                total += len(entries)
-            log.info("%s %s: %d spelers toegevoegd", tier, division, total)
+                continue
+            ids = client.match_ids(puuid, count=ids_per_player, start_time=start_time)
+            new = storage.add_match_ids(ids)
+            storage.mark_player_done(puuid)
+            log.debug("Speler %s: %d ids, %d nieuw", puuid[:8], len(ids), new)
+        except requests.RequestException as exc:
+            if not forever:
+                raise
+            log.warning("Netwerkprobleem (%s); opnieuw over %ds", exc, NETWORK_PAUSE)
+            time.sleep(NETWORK_PAUSE)
 
 
-def crawl_matches(client, storage, max_matches, ids_per_player, start_time):
+def crawl_timelines(client, storage, maximum, forever):
     progress = Progress(client)
-    while progress.done < max_matches:
-        match_id = storage.next_pending_match()
-        if match_id:
-            storage.save_match(match_id, client.match(match_id))
-            progress.tick("matches")
-            continue
-        puuid = storage.next_player()
-        if puuid is None:
-            log.info("Geen spelers meer over; seed meer tiers/pagina's.")
-            break
-        ids = client.match_ids(puuid, count=ids_per_player, start_time=start_time)
-        new = storage.add_match_ids(ids)
-        storage.mark_player_done(puuid)
-        log.debug("Speler %s: %d ids, %d nieuw", puuid[:8], len(ids), new)
-
-
-def crawl_timelines(client, storage, maximum):
-    progress = Progress(client)
-    while progress.done < maximum:
-        match_id = storage.next_match_without_timeline()
-        if match_id is None:
-            log.info("Alle opgehaalde matches hebben een timeline.")
-            break
-        storage.save_timeline(match_id, client.timeline(match_id))
-        progress.tick("timelines")
+    while forever or progress.done < maximum:
+        try:
+            match_id = storage.next_match_without_timeline()
+            if match_id is None:
+                log.info("Alle opgehaalde matches hebben een timeline.")
+                break
+            storage.save_timeline(match_id, client.timeline(match_id))
+            progress.tick("timelines")
+        except requests.RequestException as exc:
+            if not forever:
+                raise
+            log.warning("Netwerkprobleem (%s); opnieuw over %ds", exc, NETWORK_PAUSE)
+            time.sleep(NETWORK_PAUSE)
 
 
 def parse_date(value):
@@ -104,13 +135,14 @@ def main():
     run.add_argument("--tiers", nargs="+", default=["GOLD"], type=str.upper,
                      help="bv. IRON BRONZE SILVER GOLD PLATINUM EMERALD DIAMOND MASTER GRANDMASTER CHALLENGER")
     run.add_argument("--divisions", nargs="+", default=list(DIVISIONS), type=str.upper)
-    run.add_argument("--pages", type=int, default=1, help="league-v4 pagina's per tier/divisie (~205 spelers per pagina)")
     run.add_argument("--max-matches", type=int, default=1000)
+    run.add_argument("--forever", action="store_true", help="doorgaan tot de API key verloopt (negeert --max-matches)")
     run.add_argument("--ids-per-player", type=int, default=20)
     run.add_argument("--since", type=parse_date, help="alleen matches vanaf deze datum (YYYY-MM-DD)")
 
     tl = sub.add_parser("timelines", help="timelines ophalen voor opgehaalde matches")
     tl.add_argument("--max", type=int, default=1000)
+    tl.add_argument("--forever", action="store_true", help="doorgaan tot alles binnen is of de key verloopt")
 
     sub.add_parser("stats", help="toon wat er in de database staat")
 
@@ -131,10 +163,10 @@ def main():
     try:
         client = RiotClient()
         if args.command == "run":
-            seed(client, storage, args.tiers, args.divisions, args.pages)
-            crawl_matches(client, storage, args.max_matches, args.ids_per_player, args.since)
+            crawl_matches(client, storage, args.tiers, args.divisions, args.max_matches,
+                          args.ids_per_player, args.since, args.forever)
         else:
-            crawl_timelines(client, storage, args.max)
+            crawl_timelines(client, storage, args.max, args.forever)
     except ApiKeyError as exc:
         log.error("%s", exc)
         sys.exit(1)
