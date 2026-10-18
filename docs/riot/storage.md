@@ -37,4 +37,10 @@ Een match heeft de structuur van Riots [match-v5](https://developer.riotgames.co
 | `matches` | `match_id`, `status` (`pending` / `done` / `missing`) en de ruwe `json` |
 | `timelines` | `match_id`, `status` en de ruwe `json` |
 
+Voor statistieken kun je beter de tabellen in `data/stats.db` gebruiken; die zijn veel sneller dan steeds alle JSON inladen. Zie [`stats.md`](stats.md).
+
+### Gelijktijdig gebruik
+
+`Storage` wacht tot 30 seconden als een ander programma de database even vasthoudt (bijvoorbeeld `build-stats` dat aan het lezen is). Draai nooit twee crawlers tegelijk; zie de [limieten](../README.md#limieten-van-een-development-key).
+
 Je kunt de database ook bekijken met een tool als [DB Browser for SQLite](https://sqlitebrowser.org).

@@ -6,6 +6,7 @@ Examples:
     python collect.py run --tiers CHALLENGER --since 2026-01-08
     python collect.py timelines --max 200
     python collect.py stats
+    python collect.py build-stats          # tabellen voor het dashboard bijwerken
 
 Stop at any time with Ctrl+C; the next run continues where it left off.
 With --forever the crawl keeps going until the API key expires.
@@ -18,6 +19,7 @@ from datetime import datetime, timezone
 
 import requests
 
+from riot import stats
 from riot.client import ApiKeyError, RiotClient
 from riot.storage import Storage
 
@@ -146,6 +148,9 @@ def main():
 
     sub.add_parser("stats", help="toon wat er in de database staat")
 
+    bs = sub.add_parser("build-stats", help="matches omzetten naar tabellen in data/stats.db (voor het dashboard)")
+    bs.add_argument("--rebuild", action="store_true", help="stats.db weggooien en helemaal opnieuw opbouwen")
+
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -153,6 +158,11 @@ def main():
         datefmt="%H:%M:%S",
     )
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+    if args.command == "build-stats":
+        added = stats.build(rebuild=args.rebuild)
+        log.info("%d matches toegevoegd aan %s", added, stats.STATS_DB_PATH)
+        return
 
     storage = Storage()
     if args.command == "stats":

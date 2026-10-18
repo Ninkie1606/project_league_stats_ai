@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS timelines (
 class Storage:
     def __init__(self, path=config.DB_PATH):
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(path)
+        self.conn = sqlite3.connect(path, timeout=30)  # wait for readers such as build-stats
         self.conn.executescript(SCHEMA)
 
     # --- players ---

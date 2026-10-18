@@ -49,6 +49,15 @@ matches_pending  7       # match-ID's die nog opgehaald moeten worden
 timelines_done   0
 ```
 
+### `build-stats`: tabellen voor het dashboard
+
+Zet de opgehaalde matches om naar tabellen in `data/stats.db` (zie [`riot/stats.py`](riot/stats.md)). Alleen nieuwe matches worden verwerkt. Dit mag terwijl `run` draait.
+
+```bash
+python collect.py build-stats
+python collect.py build-stats --rebuild   # alles opnieuw
+```
+
 ## Lang laten draaien
 
 Met `--forever` draait het tot de key verloopt (max. 24 uur). Dan stopt het met de melding *"API key verlopen of ongeldig"*. Zet een nieuwe key in `.env` en start opnieuw.
